@@ -35,6 +35,7 @@ defmodule Craft.Consensus do
   alias Craft.Message.InstallSnapshot
   alias Craft.Message.RequestVote
   alias Craft.SnapshotServerClient
+  alias Craft.RPC
 
   require Logger
 
@@ -120,9 +121,9 @@ defmodule Craft.Consensus do
 
   # we can't use the {name, node} form, since `name` must be an atom, and we allow anything to be a group name
   # so we use the component registry on the remote node
-  def remote_operation(name, node, operation, msg) do
-    :rpc.call(node, __MODULE__, :do_operation, [operation, name, msg])
-  end
+  def remote_operation(name, node, :call, msg), do: RPC.call(node, __MODULE__, :do_operation, [:call, name, msg])
+  def remote_operation(name, node, :cast, msg), do: RPC.cast(node, __MODULE__, :do_operation, [:cast, name, msg])
+
   def do_operation(:cast, name, %AppendEntries{} = msg), do: :gen_statem.cast(via(name, __MODULE__), AppendEntries.set_arrived_at(msg))
   def do_operation(:cast, name, %AppendEntries.Results{} = msg), do: :gen_statem.cast(via(name, __MODULE__), AppendEntries.Results.set_arrived_at(msg))
   def do_operation(:cast, name, msg), do: :gen_statem.cast(via(name, __MODULE__), msg)
@@ -142,7 +143,7 @@ defmodule Craft.Consensus do
     Logger.metadata(name: args.name, node: node(), nexus: args[:nexus_pid])
 
     if nexus_pid = args[:nexus_pid] do
-      remote_group_leader = :rpc.call(node(nexus_pid), Process, :whereis, [:init])
+      remote_group_leader = RPC.call(node(nexus_pid), Process, :whereis, [:init])
       :logger.update_process_metadata(%{gl: remote_group_leader})
     end
 

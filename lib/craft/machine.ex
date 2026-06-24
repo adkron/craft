@@ -13,6 +13,7 @@ defmodule Craft.Machine do
   alias Craft.MemberCache.GroupStatus
   alias Craft.Persistence
   alias Craft.SnapshotServer.RemoteFile
+  alias Craft.RPC
 
   import Craft.Tracing, only: [logger_metadata: 1, time: 3, time: 4]
   import Craft.Application, only: [via: 2, lookup: 2]
@@ -160,7 +161,7 @@ defmodule Craft.Machine do
   end
 
   def state(name, node) do
-    :rpc.call(node, __MODULE__, :state, [name])
+    RPC.call(node, __MODULE__, :state, [name])
   end
 
   # FIXME: document that for persistent machines, the commit index and the
@@ -185,7 +186,7 @@ defmodule Craft.Machine do
   end
 
   def call(name, node, request, timeout) do
-    :rpc.call(node, __MODULE__, :do_call, [name, request, timeout])
+    RPC.call(node, __MODULE__, :do_call, [name, request, timeout])
   end
 
   def do_call(name, request, timeout) do
@@ -215,7 +216,7 @@ defmodule Craft.Machine do
     Logger.metadata(name: args.name, node: node(), nexus: args[:nexus_pid])
 
     if nexus_pid = args[:nexus_pid] do
-      remote_group_leader = :rpc.call(node(nexus_pid), Process, :whereis, [:init])
+      remote_group_leader = RPC.call(node(nexus_pid), Process, :whereis, [:init])
       :logger.update_process_metadata(%{gl: remote_group_leader})
     end
 
@@ -645,7 +646,7 @@ defmodule Craft.Machine do
     read_index_task =
       Task.async(fn ->
         Craft.Raft.with_leader_redirect(name, fn node ->
-          Craft.Raft.call_machine(name, node, :get_last_applied_index, 5_000)
+          call(name, node, :get_last_applied_index, 5_000)
         end)
       end)
 

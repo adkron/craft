@@ -1,13 +1,14 @@
 defmodule Craft.Raft do
   @moduledoc false
 
-  alias Craft.Consensus
   alias Craft.Configuration
+  alias Craft.Consensus
+  alias Craft.Consensus.State.Members
   alias Craft.Leases
   alias Craft.Machine
   alias Craft.MemberCache
   alias Craft.MemberCache.GroupStatus
-  alias Craft.Consensus.State.Members
+  alias Craft.RPC
 
   require Logger
 
@@ -21,7 +22,7 @@ defmodule Craft.Raft do
   def start_group(name, nodes, machine, opts \\ []) do
     for node <- nodes do
       :pong = Node.ping(node)
-      {:module, __MODULE__} = :rpc.call(node, Code, :ensure_loaded, [__MODULE__])
+      {:module, __MODULE__} = RPC.call(node, Code, :ensure_loaded, [__MODULE__])
     end
 
     opts =
@@ -30,24 +31,19 @@ defmodule Craft.Raft do
       |> Map.merge(%{nodes: nodes, machine: machine})
 
     for node <- nodes do
-      {:ok, _pid} = :rpc.call(node, Craft.MemberSupervisor, :start_member, [name, opts])
+      {:ok, _pid} = RPC.call(node, Craft.MemberSupervisor, :start_member, [name, opts])
     end
 
     Craft.MemberCache.discover(name, nodes)
   end
 
   def stop_group(name) do
-    with {:ok, %{members: members}} <- with_leader_redirect(name, &configuration(name, &1)) do
+    with {:ok, %{members: members}} <- with_leader_redirect(name, &Consensus.configuration(name, &1)) do
       results =
         members
         |> Members.all_nodes()
         |> Map.new(fn node ->
-          result =
-            try do
-              :rpc.call(node, __MODULE__, :stop_member, [name])
-            catch :exit, e ->
-              e
-            end
+          result = RPC.call(node, __MODULE__, :stop_member, [name])
 
           {node, result}
         end)
@@ -61,9 +57,9 @@ defmodule Craft.Raft do
 
     :pong = Node.ping(node)
 
-    case :rpc.call(node, Craft.MemberSupervisor, :start_existing_member, [name]) do
+    case RPC.call(node, Craft.MemberSupervisor, :start_existing_member, [name]) do
       {:error, :not_found} ->
-        {:ok, config} = with_leader_redirect(name, &configuration(name, &1))
+        {:ok, config} = with_leader_redirect(name, &Consensus.configuration(name, &1))
 
         {%{
           members: members,
@@ -72,29 +68,29 @@ defmodule Craft.Raft do
 
         opts =
           Map.merge(opts, %{
-            nodes: members.voting_nodes,
+            nodes: Enum.to_list(members.voting_nodes),
             machine: machine_module
           })
 
         for module <- List.flatten([__MODULE__, machine_module, opts[:global_clock] || []]) do
-          {:module, ^module} = :rpc.call(node, Code, :ensure_loaded, [module])
+          {:module, ^module} = RPC.call(node, Code, :ensure_loaded, [module])
         end
 
         # The nodes we provide to the new member here will eventually be overwritten when
         # the new member processes the MembershipEntry as it catches up to the leader.
-        {:ok, _pid} = :rpc.call(node, Craft.MemberSupervisor, :start_member, [name, opts])
+        {:ok, _pid} = RPC.call(node, Craft.MemberSupervisor, :start_member, [name, opts])
 
       {:ok, pid} ->
         {:ok, pid}
     end
 
-    with_leader_redirect(name, &call_machine(name, &1, {:command, {:add_member, node}, nil}, timeout))
+    with_leader_redirect(name, &Machine.call(name, &1, {:command, {:add_member, node}, nil}, timeout))
   end
 
   def remove_member(name, node, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 5_000)
 
-    with_leader_redirect(name, &call_machine(name, &1, {:command, {:remove_member, node}, nil}, timeout))
+    with_leader_redirect(name, &Machine.call(name, &1, {:command, {:remove_member, node}, nil}, timeout))
   end
 
   def transfer_leadership(name, to_node) do
@@ -151,7 +147,7 @@ defmodule Craft.Raft do
         {:ok, pid}
 
       {:error, :not_found} ->
-        case with_leader_redirect(name, &configuration(name, &1)) do
+        case with_leader_redirect(name, &Consensus.configuration(name, &1)) do
           {:ok, config} ->
             {%{
               members: members,
@@ -194,7 +190,7 @@ defmodule Craft.Raft do
     request_id = :erlang.make_ref()
 
       with_leader_redirect(name, fn node ->
-        with {:error, error} <- call_machine(name, node, {:command, {:machine_command, command, request_id}, nil}, timeout) do
+        with {:error, error} <- Machine.call(name, node, {:command, {:machine_command, command, request_id}, nil}, timeout) do
           {:error, error, %{request_id: request_id}}
         end
       end)
@@ -210,7 +206,7 @@ defmodule Craft.Raft do
     spawn_link(fn ->
       command_sent_reply =
         with_leader_redirect(name, fn node ->
-          with {:error, error} <- call_machine(name, node, {:command, {:machine_command, command, request_id}, {self(), request_id}}, timeout) do
+          with {:error, error} <- Machine.call(name, node, {:command, {:machine_command, command, request_id}, {self(), request_id}}, timeout) do
               {:error, error, %{request_id: request_id}}
           end
         end)
@@ -244,7 +240,7 @@ defmodule Craft.Raft do
   def command_status(name, request_id, opts) do
     timeout = Keyword.get(opts, :timeout, 5_000)
 
-    with_leader_redirect(name, &call_machine(name, &1, {:command_status, request_id}, timeout))
+    with_leader_redirect(name, &Machine.call(name, &1, {:command_status, request_id}, timeout))
   end
 
   def query(query, name, opts \\ []) do
@@ -253,16 +249,16 @@ defmodule Craft.Raft do
 
     case consistency do
       :linearizable ->
-        with_leader_redirect(name, &call_machine(name, &1, {:query, :linearizable, query}, timeout))
+        with_leader_redirect(name, &Machine.call(name, &1, {:query, :linearizable, query}, timeout))
 
       {:linearizable, {:node, node}} ->
-        call_machine(name, node, {:query, :linearizable, :follower, query}, timeout)
+        Machine.call(name, node, {:query, :linearizable, :follower, query}, timeout)
 
       {:eventual, :leader} ->
-        with_leader_redirect(name, &call_machine(name, &1, {:query, {:eventual, :leader}, query}, timeout))
+        with_leader_redirect(name, &Machine.call(name, &1, {:query, {:eventual, :leader}, query}, timeout))
 
       {:eventual, {:node, node}} ->
-        call_machine(name, node, {:query, :eventual, query}, timeout)
+        Machine.call(name, node, {:query, :eventual, query}, timeout)
 
       :eventual ->
         case MemberCache.get(name) do
@@ -272,7 +268,7 @@ defmodule Craft.Raft do
               |> Map.keys()
               |> Enum.random()
 
-            call_machine(name, node, {:query, :eventual, query}, timeout)
+            Machine.call(name, node, {:query, :eventual, query}, timeout)
 
           :not_found ->
             Logger.error("No known nodes for group '#{inspect(name)}', have you called Craft.discover/2?")
@@ -295,7 +291,7 @@ defmodule Craft.Raft do
           group_status.members
           |> Map.keys()
           |> Map.new(fn node ->
-            {node, call_machine(name, node, {:switch_mode, mode}, timeout)}
+            {node, Machine.call(name, node, {:switch_mode, mode}, timeout)}
           end)
 
         if Enum.all?(results, fn {_node, result} -> result == :ok end) do
@@ -366,41 +362,16 @@ defmodule Craft.Raft do
   end
 
   def state(name, node) do
-    try do
-      {node,
-       consensus: Consensus.state(name, node),
-       machine: Machine.state(name, node)}
-    catch :exit, e ->
-      {node, e}
-    end
+    {node,
+     consensus: Consensus.state(name, node),
+     machine: Machine.state(name, node)}
   end
 
   def state(name) do
-    {:ok, %{members: members}} = with_leader_redirect(name, &configuration(name, &1))
+    {:ok, %{members: members}} = with_leader_redirect(name, &Consensus.configuration(name, &1))
 
     members.voting_nodes
     |> MapSet.union(members.non_voting_nodes)
     |> Enum.into(%{}, &state(name, &1))
-  end
-
-  def call_machine(name, node, request, timeout) do
-    case Machine.call(name, node, request, timeout) do
-      {:badrpc, {:EXIT, {reason, _}}} ->
-        {:error, reason}
-
-      {:badrpc, reason} ->
-        {:error, reason}
-
-      result ->
-        result
-    end
-  end
-
-  defp configuration(name, node) do
-    try do
-      Consensus.configuration(name, node)
-    catch :exit, e ->
-      {:error, e}
-    end
   end
 end

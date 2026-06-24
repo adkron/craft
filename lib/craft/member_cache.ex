@@ -235,7 +235,7 @@ defmodule Craft.MemberCache do
   defp do_poll(group_name, [node | rest]) when node == node(), do: do_poll(group_name, rest)
 
   defp do_poll(group_name, [node | rest]) do
-    case :rpc.call(node, __MODULE__, :get, [group_name]) do
+    case Craft.RPC.call(node, __MODULE__, :get, [group_name]) do
       {:ok, group_status} ->
         remote_update(group_status)
 
