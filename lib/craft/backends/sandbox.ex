@@ -318,7 +318,7 @@ defmodule Craft.Sandbox do
     end
   end
 
-  def handle_call({:stop_member, name, _opts}, _from, state) do
+  def handle_call({:stop_member, name}, _from, state) do
     if state[name] do
       {:reply, :ok, Map.delete(state, name)}
     else
