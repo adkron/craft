@@ -217,4 +217,20 @@ defmodule CraftTest do
 
     File.rm_rf!(backup_dir)
   end
+
+  nexus_test "start_member/2 node overrides", %{name: name, nodes: nodes, nexus: nexus} do
+    wait_until(nexus, {Stability, :all})
+
+    :ok = Craft.stop_group(name)
+
+    for node <- nodes do
+      {:ok, _pid} = :rpc.call(node, Craft, :start_member, [name, %{nexus_pid: nexus, nodes: [node() | nodes]}])
+    end
+
+    wait_until(nexus, {Stability, :majority})
+
+    members = Craft.state(name) |> Map.keys()
+
+    assert node() in members
+  end
 end

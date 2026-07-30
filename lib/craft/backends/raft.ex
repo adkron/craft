@@ -145,34 +145,36 @@ defmodule Craft.Raft do
     GenServer.call(machine_pid, {{:query_reply, query_time, reply}, query_from})
   end
 
-  def start_member(name) do
-    with {:error, :not_found} <- Craft.MemberSupervisor.start_existing_member(name),
-         {:ok, config} <- with_leader_redirect(name, &configuration(name, &1)) do
-      {%{
-        members: members,
-        machine_module: machine_module
-      }, opts} = Map.split(config, [:members, :machine_module])
-
-      opts =
-        Map.merge(opts, %{
-          nodes: members.voting_nodes,
-          machine: machine_module
-        })
-
-      for module <- List.flatten([__MODULE__, machine_module, opts[:global_clock] || []]) do
-        {:module, ^module} = Code.ensure_loaded(module)
-      end
-
-      # The nodes we provide to the new member here will eventually be overwritten when
-      # the new member processes the MembershipEntry as it catches up to the leader.
-      Craft.MemberSupervisor.start_member(name, opts)
-
-    else
-      {:error, :unknown_group} ->
-        {:error, :not_found}
-
+  def start_member(name, override_opts) do
+    case Craft.MemberSupervisor.start_existing_member(name, override_opts) do
       {:ok, pid} ->
         {:ok, pid}
+
+      {:error, :not_found} ->
+        case with_leader_redirect(name, &configuration(name, &1)) do
+          {:ok, config} ->
+            {%{
+              members: members,
+              machine_module: machine_module
+            }, opts} = Map.split(config, [:members, :machine_module])
+
+            opts =
+              Map.merge(opts, %{
+                nodes: members.voting_nodes,
+                machine: machine_module
+              })
+
+            for module <- List.flatten([__MODULE__, machine_module, opts[:global_clock] || []]) do
+              {:module, ^module} = Code.ensure_loaded(module)
+            end
+
+            # The nodes we provide to the new member here will eventually be overwritten when
+            # the new member processes the MembershipEntry as it catches up to the leader.
+            Craft.MemberSupervisor.start_member(name, opts)
+
+          {:error, :unknown_group} ->
+            {:error, :not_found}
+        end
     end
   end
 

@@ -50,10 +50,15 @@ defmodule Craft.Consensus.State do
       end)
 
     members =
-      if entry do
-        entry.members
-      else
-        Members.new(nodes)
+      cond do
+        is_list(nodes) and length(nodes) > 0 ->
+          Members.new(nodes)
+
+        entry ->
+          entry.members
+
+        true ->
+          raise "no member nodes given or found in logs"
       end
 
     %__MODULE__{

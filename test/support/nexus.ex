@@ -155,16 +155,6 @@ defmodule Craft.Nexus do
     end
   end
 
-  def handle_cast({:log, %{meta: %{trace: {:became, :leader}, term: term, node: node}} = event}, state) do
-    state =
-      state
-      |> State.record_event(event)
-      |> State.leader_elected(node, term)
-      |> evaluate_waiter(event)
-
-    {:noreply, state}
-  end
-
   # no lease yet
   def handle_cast({:log, %{meta: %{trace: {:quorum_reached, %{lease_expires_at: lease_expires_at}}, node: node}} = event}, %State{lease: nil} = state) do
     state =

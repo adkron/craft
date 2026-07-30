@@ -49,8 +49,12 @@ defmodule Craft do
   @doc "Stops all members of the group"
   def stop_group(name), do: backend().stop_group(name)
 
-  @doc "Starts the local member with the given name"
-  def start_member(name), do: backend().start_member(name)
+  @doc """
+  Starts the local member with the given name and override options:
+
+    - `:nodes` - a list of nodes to start the member with, useful when restoring a volume-snapshot backup to new nodes.
+  """
+  def start_member(name, opts \\ []), do: backend().start_member(name, opts)
 
   @doc "Stops the local member with the given name"
   def stop_member(name), do: backend().stop_member(name)
