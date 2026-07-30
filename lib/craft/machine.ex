@@ -223,11 +223,8 @@ defmodule Craft.Machine do
 
     persistence = Craft.Log.handle(args.name)
 
-    {:ok, %State{name: args.name, module: args.machine, persistence: persistence, global_clock: args[:global_clock]}, {:continue, :init_or_restore}}
-  end
+    state = %State{name: args.name, module: args.machine, persistence: persistence, global_clock: args[:global_clock]}
 
-  @impl true
-  def handle_continue(:init_or_restore, state) do
     state =
       if state.module.__craft_mutable__() do
         data_dir =
@@ -248,7 +245,7 @@ defmodule Craft.Machine do
         with {index, %SnapshotEntry{}} <- Persistence.first(state.persistence) do
           (File.ls!(snapshots_dir) -- [to_string(index)])
           |> Enum.each(fn old_snapshot ->
-            state.snapshots_dir
+            snapshots_dir
             |> Path.join(old_snapshot)
             |> File.rm_rf()
           end)
@@ -286,7 +283,7 @@ defmodule Craft.Machine do
       end
     end)
 
-    {:noreply, %{state | apply_up_to: state.last_applied}}
+    {:ok, %{state | apply_up_to: state.last_applied}}
   end
 
   @impl true
