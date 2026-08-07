@@ -141,7 +141,7 @@ defmodule Craft.Sandbox do
   end
 
   @doc false
-  def start_member(name) do
+  def start_member(name, _opts) do
     GenServer.call(find!(), {:start_member, name})
   end
 
